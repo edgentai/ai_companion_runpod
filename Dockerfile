@@ -4,7 +4,7 @@ WORKDIR /
 
 # Install dependencies
 RUN pip install --no-cache-dir runpod
-
+RUN CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
 # Copy your handler file
 COPY rp_handler.py /
 
