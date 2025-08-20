@@ -1,12 +1,18 @@
-FROM python:3.10-slim
+# Use RunPod's Python 3.10 CUDA image
+FROM runpod/pytorch:2.1.0-py3.10-cuda12.1.0-devel-ubuntu22.04
 
-WORKDIR /
+# Copy requirements file
+COPY requirements.txt /
 
 # Install dependencies
-RUN pip install --no-cache-dir runpod
-RUN CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
+RUN python -m pip install --upgrade pip && \
+    python -m pip install -r /requirements.txt
+
 # Copy your handler file
 COPY rp_handler.py /
 
-# Start the container
-CMD ["python3", "-u", "rp_handler.py"]
+# Set the working directory
+WORKDIR /
+
+# RunPod handler command
+CMD ["python", "-u", "rp_handler.py"]

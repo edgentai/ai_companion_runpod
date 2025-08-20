@@ -28,9 +28,19 @@
 # # Start the Serverless function when the script is run
 # if __name__ == '__main__':
 #     runpod.serverless.start({'handler': handler })
-
+import os
 import runpod
 from llama_cpp import Llama
+from huggingface_hub import login
+
+# Get token from environment variable
+hf_token = os.environ.get('HF_TOKEN')
+if hf_token:
+    login(token=hf_token)
+    print("HuggingFace authentication successful!")
+else:
+    print("Warning: No HF_TOKEN found, proceeding without authentication")
+
 
 # Initialize the model outside the handler for better performance
 # This way the model is loaded once when the worker starts, not on every request
@@ -61,6 +71,7 @@ def handler(event):
     system_prompt = input_data.get('system_prompt', 'You are a helpful assistant.')
     chat_history = input_data.get('chat_history', [])  # Expecting list of message dicts
     new_message = input_data.get('new_message', '')
+    system_prompt += ". Reasoning: low"
     
     # Validate new_message
     if not new_message:
