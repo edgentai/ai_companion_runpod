@@ -1,0 +1,16 @@
+{
+    "input": {
+      "system_prompt": "You are a knowledgeable AI assistant specializing in science.",
+      "chat_history": [
+        {
+          "role": "user",
+          "content": "What is photosynthesis?"
+        },
+        {
+          "role": "assistant", 
+          "content": "Photosynthesis is the process by which plants convert light energy into chemical energy..."
+        }
+      ],
+      "new_message": "Can you explain it in simpler terms?"
+    }
+  }
