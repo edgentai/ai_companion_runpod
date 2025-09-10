@@ -12,7 +12,7 @@ COPY requirements.txt /
 # Install uv and vLLM first using the correct method
 RUN python -m pip install --upgrade pip && \
     pip install --upgrade uv && \
-    uv pip install vllm==0.10.1 --torch-backend=auto
+    uv pip install vllm==0.10.1 --torch-backend=auto --system
 
 # Install other dependencies from requirements.txt
 RUN python -m pip install -r /requirements.txt
