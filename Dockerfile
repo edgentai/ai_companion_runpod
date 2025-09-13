@@ -13,11 +13,18 @@ ENV CUDA_LAUNCH_BLOCKING=0
 ENV NCCL_P2P_DISABLE=1
 ENV TOKENIZERS_PARALLELISM=false
 
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy requirements file
 COPY requirements.txt /
 
-# Install vLLM and other dependencies
+# Install vLLM with FlashAttention 3
 RUN python -m pip install --upgrade pip && \
+    pip install packaging ninja && \
+    pip install flash-attn==2.7.0 --no-build-isolation && \
     pip install vllm==0.10.1 && \
     pip install -r /requirements.txt
 
