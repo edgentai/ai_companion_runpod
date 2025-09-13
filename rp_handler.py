@@ -149,13 +149,8 @@ def handler(event):
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
-            stop=["<|end|>", "<|start|>"],  # Simplified stop tokens
-            include_stop_str_in_output=False,  # Don't include stop strings
+            stop=["<|end|>", "<|start|>", "assistant", "\nassistant"],  # Simplified stop tokens
             skip_special_tokens=True,  # Clean output
-            # Performance settings for real-time chat
-            use_beam_search=False,  # Faster generation
-            early_stopping=False,
-            top_k=-1,  # Use top_p only
         )
         
         # Generate completion
