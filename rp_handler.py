@@ -29,7 +29,6 @@ llm = LLM(
     enable_prefix_caching=True,  # Cache common prefixes (system prompts)
     
     # Memory and batching optimizations
-    use_v2_block_manager=True,  # Better memory management for concurrent requests
     enable_chunked_prefill=True,  # Better handling of varying prompt lengths
     disable_custom_all_reduce=True,  # Optimize for single GPU
     swap_space=4,  # GB of CPU swap space for overflow
@@ -149,8 +148,13 @@ def handler(event):
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
-            stop=["<|end|>", "<|start|>", "assistant", "\nassistant"],  # Simplified stop tokens
+            stop=["<|end|>", "<|start|>"],  # Simplified stop tokens
+            include_stop_str_in_output=False,  # Don't include stop strings
             skip_special_tokens=True,  # Clean output
+            # Performance settings for real-time chat
+            use_beam_search=False,  # Faster generation
+            early_stopping=False,
+            top_k=-1,  # Use top_p only
         )
         
         # Generate completion
