@@ -6,13 +6,6 @@ ENV VLLM_USE_CACHE=1
 ENV CUDA_HOME=/usr/local/cuda
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
-# A100 specific optimizations
-ENV TORCH_CUDA_ARCH_LIST="8.0"
-ENV VLLM_ATTENTION_BACKEND="FLASH_ATTN"
-ENV CUDA_LAUNCH_BLOCKING=0
-ENV NCCL_P2P_DISABLE=1
-ENV TOKENIZERS_PARALLELISM=false
-
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     ninja-build \
@@ -24,8 +17,7 @@ COPY requirements.txt /
 # Install vLLM with FlashAttention 3
 RUN python -m pip install --upgrade pip && \
     pip install packaging ninja && \
-    pip install flash-attn==2.7.0 --no-build-isolation && \
-    pip install vllm==0.10.1 && \
+    pip install vllm==0.10.1 --torch-backend=auto && \
     pip install -r /requirements.txt
 
 # Copy your handler file
