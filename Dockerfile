@@ -16,8 +16,7 @@ COPY requirements.txt /
 
 # Install vLLM with FlashAttention 3
 RUN python -m pip install --upgrade pip && \
-    pip install packaging ninja && \
-    pip install vllm==0.10.1 --torch-backend=auto && \
+    pip install vllm==0.10.1 && \
     pip install -r /requirements.txt
 
 # Copy your handler file
