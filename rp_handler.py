@@ -165,7 +165,7 @@ def handler(event):
         generated_text = outputs[0].outputs[0].text
 
         print("Chat completion generated successfully")
-        print(f"Generated text length: {len(generated_text)} characters")
+        print(f"Generated text: {generated_text}")
 
         # Build response in a format similar to the original
         response = {
