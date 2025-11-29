@@ -1,11 +1,18 @@
 import os
 import json
+import re
+import subprocess
 import runpod
 import boto3
+import gdown
+import librosa
+import noisereduce as nr
+import soundfile as sf
 from vllm import LLM, SamplingParams
 from huggingface_hub import login
 from datetime import datetime
 from botocore.exceptions import ClientError
+from faster_whisper import WhisperModel, BatchedInferencePipeline
 
 # Get token from environment variable
 hf_token = os.environ.get("HF_TOKEN")
@@ -15,10 +22,9 @@ if hf_token:
 else:
     print("Warning: No HF_TOKEN found, proceeding without authentication")
 
-# NEW: Initialize AWS clients (for class notes feature)
+# Initialize AWS clients (for class notes feature)
 print("Initializing AWS clients...")
 try:
-    # Get AWS credentials from environment
     aws_key = os.environ.get("AWS_ACCESS_KEY_ID", "")
     aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
     aws_region = os.environ.get("AWS_REGION", "ap-south-1")
@@ -38,7 +44,7 @@ try:
         )
         print("AWS clients initialized successfully!")
     else:
-        print("Warning: AWS credentials not found - class notes feature will not work")
+        print("Warning: AWS credentials not found")
         sqs = None
         s3 = None
 except Exception as e:
@@ -46,37 +52,42 @@ except Exception as e:
     sqs = None
     s3 = None
 
-# Initialize the model with optimizations for multi-user real-time chat
+# NEW: Initialize Whisper model
+print("Initializing Whisper model...")
+try:
+    whisper_model = WhisperModel(
+        "small",  # Model size
+        device="cuda",
+        compute_type="int8"
+    )
+    batched_whisper = BatchedInferencePipeline(model=whisper_model)
+    print("Whisper model initialized successfully!")
+except Exception as e:
+    print(f"Warning: Failed to initialize Whisper model: {e}")
+    batched_whisper = None
+
+# Initialize the LLM
 print("Loading model...")
 llm = LLM(
     model="aimagic/jinx-gpt-oss-20b-vllm-compatible",
     dtype="bfloat16",
     trust_remote_code=True,
     async_scheduling=True,
-    # Performance optimizations
     enforce_eager=True,
     gpu_memory_utilization=0.95,
-    
-    # Multi-user optimizations
     max_num_seqs=256,
     max_model_len=4096,
     enable_prefix_caching=True,
-    
-    # Memory and batching optimizations
     enable_chunked_prefill=True,
     disable_custom_all_reduce=True,
     swap_space=4,
-    
-    # A100 specific optimizations
     block_size=32,
 )
 print("Model loaded successfully!")
 
 
 def build_prompt(system_prompt, chat_history, new_message):
-    """
-    Build the prompt using the specific template format for the Jinx model.
-    """
+    """Build the prompt for chat (ORIGINAL - UNCHANGED)"""
     current_date = datetime.now().strftime("%Y-%m-%d")
 
     prompt_parts = []
@@ -113,9 +124,7 @@ def build_prompt(system_prompt, chat_history, new_message):
 
 
 def handle_chat(input_data):
-    """
-    Handle chat requests (ORIGINAL FUNCTIONALITY - UNCHANGED)
-    """
+    """Handle chat requests (ORIGINAL - UNCHANGED)"""
     print("Processing chat completion")
     
     system_prompt = input_data.get(
@@ -171,95 +180,197 @@ def handle_chat(input_data):
         return {"status": "error", "error": str(e)}
 
 
-def upload_to_s3(content, bucket_name, s3_key):
-    """NEW: Upload content to S3"""
+def extract_drive_id(drive_url):
+    """NEW: Extract file ID from Google Drive URL"""
+    if not drive_url:
+        raise ValueError("Google Drive URL cannot be empty")
+    
+    print(f"Extracting file ID from URL: {drive_url}")
+    file_id_match = re.search(r"/file/d/([a-zA-Z0-9_-]+)", drive_url)
+    
+    if not file_id_match:
+        raise ValueError(f"Invalid Google Drive URL format: {drive_url}")
+    
+    file_id = file_id_match.group(1)
+    print(f"Extracted file ID: {file_id}")
+    return file_id
+
+
+def download_from_google_drive(drive_url, destination):
+    """NEW: Download a file from Google Drive"""
+    print(f"Downloading file from Google Drive to: {destination}")
+    
     try:
-        if not s3:
-            raise ValueError("S3 client not initialized - check AWS credentials")
-        
-        print(f"Uploading to S3: bucket={bucket_name}, key={s3_key}")
-        s3.put_object(
-            Bucket=bucket_name,
-            Key=s3_key,
-            Body=content.encode('utf-8')
-        )
-        print("S3 upload successful")
+        file_id = extract_drive_id(drive_url)
+        download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+        gdown.download(download_url, destination, quiet=False)
+        print(f"Download completed for file ID: {file_id}")
     except Exception as e:
-        print(f"S3 upload failed: {e}")
+        print(f"Error downloading file from Google Drive: {e}")
         raise
 
 
-def send_sqs_message(identifier, s3_location, bucket_name, queue_url):
-    """NEW: Send message to SQS queue"""
+def extract_audio_ffmpeg(video_path, audio_path):
+    """NEW: Extract audio from video using ffmpeg (more reliable than moviepy)"""
+    print(f"Extracting audio from {video_path} to {audio_path}")
+    
     try:
-        if not sqs:
-            raise ValueError("SQS client not initialized - check AWS credentials")
+        subprocess.run([
+            'ffmpeg', '-i', video_path,
+            '-vn',  # No video
+            '-acodec', 'pcm_s16le',  # Audio codec
+            '-ar', '16000',  # Sample rate
+            '-ac', '1',  # Mono
+            audio_path
+        ], check=True, capture_output=True)
         
-        message_data = {
-            "identifier": identifier,
-            "s3_location": s3_location,
-            "bucket_name": bucket_name,
-        }
+        print(f"Audio extracted successfully to {audio_path}")
+    except subprocess.CalledProcessError as e:
+        print(f"ffmpeg error: {e.stderr.decode()}")
+        raise Exception(f"Audio extraction failed: {e}")
+
+
+def transcribe_audio(audio_path):
+    """NEW: Transcribe audio using Whisper"""
+    if not batched_whisper:
+        raise ValueError("Whisper model not initialized")
+    
+    print(f"Transcribing audio: {audio_path}")
+    
+    try:
+        # Load and reduce noise
+        print("Loading audio and reducing noise...")
+        audio, sr = librosa.load(audio_path, sr=16000)
+        reduced_noise_audio = nr.reduce_noise(y=audio, sr=sr)
         
-        print(f"Sending SQS message to {queue_url}")
-        sqs.send_message(
-            QueueUrl=queue_url,
-            MessageBody=json.dumps(message_data)
+        # Save cleaned audio
+        cleaned_path = audio_path.replace('.wav', '_cleaned.mp3')
+        sf.write(cleaned_path, reduced_noise_audio, sr)
+        print(f"Noise-reduced audio saved to: {cleaned_path}")
+        
+        # Transcribe
+        print("Transcribing with Whisper...")
+        segments, info = batched_whisper.transcribe(
+            cleaned_path,
+            temperature=0.01,
+            no_speech_threshold=0.99,
+            batch_size=8,
+            beam_size=1,
+            vad_filter=True,
+            condition_on_previous_text=False
         )
-        print("SQS message sent successfully")
+        
+        # Filter and accumulate transcription
+        transcription_parts = []
+        for segment in segments:
+            if segment.avg_logprob >= -0.5:  # Filter low-confidence segments
+                transcription_parts.append(segment.text)
+                print(f"[{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text[:50]}...")
+        
+        transcription = " ".join(transcription_parts).strip()
+        
+        # Cleanup
+        if os.path.exists(cleaned_path):
+            os.remove(cleaned_path)
+        
+        print(f"Transcription completed. Length: {len(transcription)} characters")
+        return transcription
+        
     except Exception as e:
-        print(f"SQS message failed: {e}")
+        print(f"Error during transcription: {e}")
         raise
 
 
 def handle_class_notes(event):
-    """
-    Handle class notes requests (NEW - with AWS support)
-    """
+    """Handle class notes requests (NEW - with transcription)"""
     print("Class notes request received")
     
-    # Check AWS clients
+    # Check dependencies
     if not s3 or not sqs:
         return {
             "status": "error",
-            "error": "AWS clients not initialized. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables.",
-            "step": 2
+            "error": "AWS clients not initialized. Set AWS credentials.",
+            "step": 3
         }
     
-    # For Step 2, just test AWS connectivity
+    if not batched_whisper:
+        return {
+            "status": "error",
+            "error": "Whisper model not initialized",
+            "step": 3
+        }
+    
+    # Get required parameters
+    recording_url = event.get("recording_url")
+    if not recording_url:
+        return {
+            "status": "error",
+            "error": "recording_url is required for class notes",
+            "step": 3
+        }
+    
+    bucket_name = event.get("bucket_name")
+    object_path = event.get("object_path")
+    identifier = event.get("identifier", "test-transcript")
+    callback_queue = event.get("callback_queue")
+    
+    print(f"Processing recording: {recording_url}")
+    print(f"S3 destination: {bucket_name}/{object_path}")
+    
+    # Temporary file paths
+    file_id = extract_drive_id(recording_url)
+    video_path = f"/tmp/{file_id}.mp4"
+    audio_path = f"/tmp/{file_id}.wav"
+    
     try:
-        # Test S3 access
-        input_data = event.get("input", {})
-        test_text = "Step 2 test - AWS connectivity working!"
+        # Step 1: Download video
+        print("Step 1/3: Downloading video...")
+        download_from_google_drive(recording_url, video_path)
         
-        # These should be in the event for real use
-        bucket_name = event.get("bucket_name", "test-bucket")
-        identifier = event.get("identifier", "test-123")
-        queue_url = event.get("callback_queue", os.environ.get("SQS_QUEUE_URL", ""))
+        # Step 2: Extract audio
+        print("Step 2/3: Extracting audio...")
+        extract_audio_ffmpeg(video_path, audio_path)
         
-        print(f"Testing AWS with bucket={bucket_name}, identifier={identifier}")
+        # Step 3: Transcribe
+        print("Step 3/3: Transcribing audio...")
+        transcript = transcribe_audio(audio_path)
+        
+        print(f"Transcription successful! Length: {len(transcript)} characters")
+        print(f"Word count: {len(transcript.split())} words")
+        
+        # Cleanup temp files
+        if os.path.exists(video_path):
+            os.remove(video_path)
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
         
         return {
             "status": "success",
-            "message": "Step 2 complete! AWS clients initialized. Transcription will be added in Step 3.",
-            "aws_configured": True,
-            "step": 2,
-            "note": "Class notes feature requires: recording_url, bucket_name, identifier, callback_queue"
+            "message": "Step 3 complete! Transcription working. Summarization will be added in Step 4.",
+            "transcript_preview": transcript[:500] + "..." if len(transcript) > 500 else transcript,
+            "transcript_length": len(transcript),
+            "word_count": len(transcript.split()),
+            "step": 3,
+            "note": "Full transcript generated. Summarization coming in Step 4."
         }
         
     except Exception as e:
-        print(f"AWS test failed: {e}")
+        print(f"Error processing class notes: {e}")
+        
+        # Cleanup on error
+        for path in [video_path, audio_path]:
+            if os.path.exists(path):
+                os.remove(path)
+        
         return {
             "status": "error",
-            "error": f"AWS connectivity test failed: {str(e)}",
-            "step": 2
+            "error": str(e),
+            "step": 3
         }
 
 
 def handler(event):
-    """
-    Main handler - Routes based on feature_flag
-    """
+    """Main handler - Routes based on feature_flag"""
     print(f"Worker Start")
 
     input_data = event.get("input", {})

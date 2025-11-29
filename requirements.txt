@@ -3,3 +3,10 @@ huggingface-hub
 transformers==4.56.1
 sentencepiece
 protobuf
+boto3
+faster-whisper
+ctranslate2
+librosa
+noisereduce
+gdown
+soundfile
