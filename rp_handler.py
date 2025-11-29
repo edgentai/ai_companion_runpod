@@ -41,16 +41,7 @@ print("Model loaded successfully!")
 def build_prompt(system_prompt, chat_history, new_message):
     """
     Build the prompt using the specific template format for the Jinx model.
-
-    Args:
-        system_prompt (str): The system prompt
-        chat_history (list): List of message dictionaries with 'role' and 'content'
-        new_message (str): The new user message
-
-    Returns:
-        str: Formatted prompt string
     """
-
     # Get current date for the system prompt
     current_date = datetime.now().strftime("%Y-%m-%d")
 
@@ -98,27 +89,17 @@ def build_prompt(system_prompt, chat_history, new_message):
     return "".join(prompt_parts)
 
 
-def handler(event):
+def handle_chat(input_data):
     """
-    This function processes incoming requests to your Serverless endpoint.
-
-    Args:
-        event (dict): Contains the input data and request metadata
-
-    Returns:
-        dict: The chat completion response from the model
+    Handle chat requests (ORIGINAL FUNCTIONALITY - UNCHANGED)
     """
-
-    print(f"Worker Start")
-
-    # Extract input data
-    input_data = event["input"]
-
+    print("Processing chat completion")
+    
     # Get user inputs
     system_prompt = input_data.get(
         "system_prompt", "You are Jinx, a creative and intelligent assistant."
     )
-    chat_history = input_data.get("chat_history", [])  # Expecting list of message dicts
+    chat_history = input_data.get("chat_history", [])
     new_message = input_data.get("new_message", "")
 
     # Get generation parameters (with defaults)
@@ -133,7 +114,6 @@ def handler(event):
     # Build the prompt using the template format
     prompt = build_prompt(system_prompt, chat_history, new_message)
 
-    print(f"Processing chat completion")
     print(
         f"System prompt: {system_prompt[:100]}..."
         if len(system_prompt) > 100
@@ -177,10 +157,8 @@ def handler(event):
                 }
             ],
             "usage": {
-                "prompt_tokens": len(prompt.split()),  # Approximate token count
-                "completion_tokens": len(
-                    generated_text.split()
-                ),  # Approximate token count
+                "prompt_tokens": len(prompt.split()),
+                "completion_tokens": len(generated_text.split()),
                 "total_tokens": len(prompt.split()) + len(generated_text.split()),
             },
         }
@@ -191,6 +169,47 @@ def handler(event):
     except Exception as e:
         print(f"Error generating completion: {str(e)}")
         return {"status": "error", "error": str(e)}
+
+
+def handle_class_notes(event):
+    """
+    Handle class notes requests (NEW - placeholder)
+    """
+    print("Class notes request received - feature not yet implemented")
+    
+    return {
+        "status": "success",
+        "message": "Class notes feature will be added in Step 2. Your chat still works!",
+        "step": 1
+    }
+
+
+def handler(event):
+    """
+    Main handler - NEW: Routes based on feature_flag
+    
+    Args:
+        event (dict): Contains the input data and request metadata
+        
+    Returns:
+        dict: Response from appropriate handler
+    """
+    print(f"Worker Start")
+
+    # Extract input data
+    input_data = event.get("input", {})
+    
+    # NEW: Check feature_flag to route request
+    feature_flag = input_data.get("feature_flag")
+    
+    if feature_flag == "class_notes":
+        # NEW: Route to class notes handler (placeholder for now)
+        print("Routing to class notes handler")
+        return handle_class_notes(event)
+    else:
+        # Default: Route to chat handler (ORIGINAL FUNCTIONALITY)
+        print("Routing to chat handler (original functionality)")
+        return handle_chat(input_data)
 
 
 # Start the Serverless function when the script is run
