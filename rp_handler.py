@@ -302,8 +302,13 @@ def handle_class_notes(event):
             "step": 3
         }
     
-    # Get required parameters
-    recording_url = event.get("recording_url")
+    # Get parameters - check both locations for compatibility
+    # RunPod convention: parameters in event["input"]
+    # But also support top-level for backwards compatibility
+    input_data = event.get("input", {})
+    
+    # Get required parameters (try input first, then top level)
+    recording_url = input_data.get("recording_url") or event.get("recording_url")
     if not recording_url:
         return {
             "status": "error",
@@ -311,10 +316,10 @@ def handle_class_notes(event):
             "step": 3
         }
     
-    bucket_name = event.get("bucket_name")
-    object_path = event.get("object_path")
-    identifier = event.get("identifier", "test-transcript")
-    callback_queue = event.get("callback_queue")
+    bucket_name = input_data.get("bucket_name") or event.get("bucket_name")
+    object_path = input_data.get("object_path") or event.get("object_path")
+    identifier = input_data.get("identifier") or event.get("identifier", "test-transcript")
+    callback_queue = input_data.get("callback_queue") or event.get("callback_queue")
     
     print(f"Processing recording: {recording_url}")
     print(f"S3 destination: {bucket_name}/{object_path}")
