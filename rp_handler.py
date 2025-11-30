@@ -285,7 +285,7 @@ def transcribe_audio(audio_path):
 
 def handle_class_notes(event):
     """Handle class notes requests"""
-    print("Class notes request received")
+    print("Class notes request received", event, type(event))
     
     # Check dependencies
     if not s3 or not sqs:
