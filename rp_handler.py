@@ -92,55 +92,37 @@ except Exception as e:
 
 def build_educational_summary_prompt(transcript, class_title="Class Lecture"):
     """Build prompt for educational summarization"""
-    prompt = f"""You are an expert educational content summarizer. Analyze this class transcript and create comprehensive study notes.
+    prompt = f"""Create educational study notes from this class transcript.
 
-CLASS TRANSCRIPT:
+TRANSCRIPT:
 {transcript}
 
-Create detailed study notes following this structure:
+Your task: Write a comprehensive educational summary titled "{class_title} - Summary"
 
-# {class_title} - Summary
+Include these sections in your summary:
 
-## Overview
-[2-3 sentences summarizing the main topic and key learning objectives]
+SECTION 1 - Overview: 
+Write 2-3 sentences about what this lecture teaches and the main learning goals.
 
-## Key Concepts
+SECTION 2 - Key Concepts:
+Identify the main concepts. For each concept explain:
+- What it is (definition)
+- Why it matters (context from lecture) 
+- How it's used (example from class)
 
-### [Concept 1 Name]
-- Definition: [Clear, concise definition]
-- Explanation: [Brief explanation with context]
-- Example: [Relevant example from the lecture]
+SECTION 3 - Main Topics:
+List the major topics covered, numbered, with brief explanations.
 
-### [Concept 2 Name]
-- Definition: [Clear, concise definition]
-- Explanation: [Brief explanation with context]
-- Example: [Relevant example from the lecture]
+SECTION 4 - Examples and Case Studies:
+Describe the real-world examples discussed and what students learn from them.
 
-[Continue for all major concepts...]
+SECTION 5 - Key Takeaways:
+List 5-7 most important points students must remember.
 
-## Main Topics Covered
-1. [Topic 1]: [Brief description]
-2. [Topic 2]: [Brief description]
-3. [Topic 3]: [Brief description]
-[Continue as needed...]
+SECTION 6 - Terms and Definitions:
+Define all important technical terms introduced.
 
-## Important Examples & Case Studies
-- [Example 1]: [Description and key takeaway]
-- [Example 2]: [Description and key takeaway]
-[Continue as needed...]
-
-## Key Takeaways
-1. [Important point 1]
-2. [Important point 2]
-3. [Important point 3]
-[Continue with 5-7 key takeaways...]
-
-## Terms & Definitions
-- **[Term 1]**: [Definition]
-- **[Term 2]**: [Definition]
-[Continue with important terms...]
-
-Generate comprehensive, well-organized study notes that would help a student who missed the class understand all the important content."""
+Write your summary now, starting with the title."""
 
     return prompt
 
