@@ -88,6 +88,86 @@ except Exception as e:
     batched_whisper = None
 
 
+def build_educational_summary_prompt(transcript, class_title="Class Lecture"):
+    """Build prompt for educational summarization"""
+    prompt = f"""You are an expert educational content summarizer. Analyze this class transcript and create comprehensive study notes.
+
+CLASS TRANSCRIPT:
+{transcript}
+
+Create detailed study notes following this structure:
+
+# {class_title} - Summary
+
+## Overview
+[2-3 sentences summarizing the main topic and key learning objectives]
+
+## Key Concepts
+
+### [Concept 1 Name]
+- Definition: [Clear, concise definition]
+- Explanation: [Brief explanation with context]
+- Example: [Relevant example from the lecture]
+
+### [Concept 2 Name]
+- Definition: [Clear, concise definition]
+- Explanation: [Brief explanation with context]
+- Example: [Relevant example from the lecture]
+
+[Continue for all major concepts...]
+
+## Main Topics Covered
+1. [Topic 1]: [Brief description]
+2. [Topic 2]: [Brief description]
+3. [Topic 3]: [Brief description]
+[Continue as needed...]
+
+## Important Examples & Case Studies
+- [Example 1]: [Description and key takeaway]
+- [Example 2]: [Description and key takeaway]
+[Continue as needed...]
+
+## Key Takeaways
+1. [Important point 1]
+2. [Important point 2]
+3. [Important point 3]
+[Continue with 5-7 key takeaways...]
+
+## Terms & Definitions
+- **[Term 1]**: [Definition]
+- **[Term 2]**: [Definition]
+[Continue with important terms...]
+
+Generate comprehensive, well-organized study notes that would help a student who missed the class understand all the important content."""
+
+    return prompt
+
+
+def generate_summary(transcript, class_title="Class Lecture"):
+    """Generate educational summary using vLLM"""
+    print("Generating educational summary with vLLM...")
+    
+    prompt = build_educational_summary_prompt(transcript, class_title)
+    
+    sampling_params = SamplingParams(
+        max_tokens=2048,  # Longer for detailed summaries
+        temperature=0.3,  # Lower temperature for factual content
+        top_p=0.9,
+        stop=None  # Let it complete naturally
+    )
+    
+    try:
+        outputs = llm.generate([prompt], sampling_params)
+        summary = outputs[0].outputs[0].text.strip()
+        
+        print(f"Summary generated successfully. Length: {len(summary)} characters")
+        return summary
+        
+    except Exception as e:
+        print(f"Error generating summary: {e}")
+        raise
+
+
 def build_prompt(system_prompt, chat_history, new_message):
     """Build the prompt for chat (ORIGINAL - UNCHANGED)"""
     current_date = datetime.now().strftime("%Y-%m-%d")
@@ -284,45 +364,45 @@ def transcribe_audio(audio_path):
 
 
 def handle_class_notes(event):
-    """Handle class notes requests"""
-    print("Class notes request received", event, type(event))
+    """Handle class notes requests with transcription AND summarization"""
+    print("Class notes request received")
     
     # Check dependencies
     if not s3 or not sqs:
         return {
             "status": "error",
             "error": "AWS clients not initialized. Set AWS credentials.",
-            "step": 3
+            "step": 4
         }
     
     if not batched_whisper:
         return {
             "status": "error",
             "error": "Whisper model not initialized",
-            "step": 3
+            "step": 4
         }
     
-    # Get parameters - check both locations for compatibility
-    # RunPod convention: parameters in event["input"]
-    # But also support top-level for backwards compatibility
+    # Get parameters from event["input"]
     input_data = event.get("input", {})
     
-    # Get required parameters (try input first, then top level)
+    # Get required parameters
     recording_url = input_data.get("recording_url") or event.get("recording_url")
     if not recording_url:
         return {
             "status": "error",
             "error": "recording_url is required for class notes",
-            "step": 3
+            "step": 4
         }
     
     bucket_name = input_data.get("bucket_name") or event.get("bucket_name")
     object_path = input_data.get("object_path") or event.get("object_path")
     identifier = input_data.get("identifier") or event.get("identifier", "test-transcript")
     callback_queue = input_data.get("callback_queue") or event.get("callback_queue")
+    class_title = input_data.get("class_title", "Class Lecture")
     
     print(f"Processing recording: {recording_url}")
     print(f"S3 destination: {bucket_name}/{object_path}")
+    print(f"Class title: {class_title}")
     
     # Temporary file paths
     file_id = extract_drive_id(recording_url)
@@ -331,19 +411,25 @@ def handle_class_notes(event):
     
     try:
         # Step 1: Download video
-        print("Step 1/3: Downloading video...")
+        print("Step 1/4: Downloading video...")
         download_from_google_drive(recording_url, video_path)
         
         # Step 2: Extract audio
-        print("Step 2/3: Extracting audio...")
+        print("Step 2/4: Extracting audio...")
         extract_audio_ffmpeg(video_path, audio_path)
         
         # Step 3: Transcribe
-        print("Step 3/3: Transcribing audio...")
+        print("Step 3/4: Transcribing audio...")
         transcript = transcribe_audio(audio_path)
         
         print(f"Transcription successful! Length: {len(transcript)} characters")
         print(f"Word count: {len(transcript.split())} words")
+        
+        # Step 4: Summarize with vLLM
+        print("Step 4/4: Generating educational summary...")
+        summary = generate_summary(transcript, class_title)
+        
+        print(f"Summary generated! Length: {len(summary)} characters")
         
         # Cleanup temp files
         if os.path.exists(video_path):
@@ -353,12 +439,13 @@ def handle_class_notes(event):
         
         return {
             "status": "success",
-            "message": "Step 3 complete! Transcription working. Summarization will be added in Step 4.",
-            "transcript_preview": transcript[:500] + "..." if len(transcript) > 500 else transcript,
+            "message": "Step 4 complete! Transcription and summarization working.",
             "transcript_length": len(transcript),
-            "word_count": len(transcript.split()),
-            "step": 3,
-            "note": "Full transcript generated. Summarization coming in Step 4."
+            "transcript_word_count": len(transcript.split()),
+            "summary_length": len(summary),
+            "summary": summary,
+            "step": 4,
+            "note": "Full transcript and summary generated. S3 upload coming in Step 5."
         }
         
     except Exception as e:
@@ -372,7 +459,7 @@ def handle_class_notes(event):
         return {
             "status": "error",
             "error": str(e),
-            "step": 3
+            "step": 4
         }
 
 
