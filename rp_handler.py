@@ -93,7 +93,7 @@ llm = LLM(
     enforce_eager=True,
     gpu_memory_utilization=0.85,
     max_num_seqs=256,
-    max_model_len=4096,
+    max_model_len=8192,  # ✅ INCREASED from 4096 to handle longer transcripts
     enable_prefix_caching=True,
     enable_chunked_prefill=True,
     disable_custom_all_reduce=True,
@@ -246,8 +246,45 @@ def generate_summary(transcript, class_title="Class Lecture"):
         transcript_clean = '. '.join(educational_sentences[:20])  # First 20 educational sentences
         print(f"Extracted {len(transcript_clean)} chars of educational content")
     
-    # STEP 2: Build prompt with cleaned transcript
+    # STEP 2: Check prompt length and truncate if needed
+    # Rough estimate: 1 token ≈ 2.5 characters
+    # Max model length: 8192 tokens
+    # Reserve 2048 tokens for output
+    # Max prompt tokens: 6144
+    # Max prompt chars: ~15,360
+    
+    MAX_PROMPT_CHARS = 15000  # Conservative limit
+    INSTRUCTION_OVERHEAD = 1000  # Chars for prompt instructions
+    MAX_TRANSCRIPT_CHARS = MAX_PROMPT_CHARS - INSTRUCTION_OVERHEAD
+    
+    if len(transcript_clean) > MAX_TRANSCRIPT_CHARS:
+        print(f"Warning: Transcript too long ({len(transcript_clean)} chars). Truncating to {MAX_TRANSCRIPT_CHARS} chars.")
+        
+        # Intelligent truncation: keep beginning and end, mark truncation
+        # Keep first 70% and last 30% of allowed length
+        keep_start = int(MAX_TRANSCRIPT_CHARS * 0.7)
+        keep_end = int(MAX_TRANSCRIPT_CHARS * 0.3)
+        
+        start_part = transcript_clean[:keep_start]
+        end_part = transcript_clean[-keep_end:]
+        
+        transcript_clean = (
+            f"{start_part}\n\n"
+            f"[... middle section truncated due to length ...]\n\n"
+            f"{end_part}"
+        )
+        
+        print(f"Truncated transcript to {len(transcript_clean)} chars (kept beginning and end)")
+    
+    # STEP 3: Build prompt with cleaned/truncated transcript
     prompt = build_educational_summary_prompt(transcript_clean, class_title)
+    
+    # Final safety check: estimate token count
+    estimated_tokens = len(prompt) // 2.5
+    print(f"Estimated prompt tokens: {estimated_tokens:.0f} (max: 8192)")
+    
+    if estimated_tokens > 7500:  # Close to limit
+        print(f"Warning: Prompt very close to token limit. May fail.")
     
     sampling_params = SamplingParams(
         max_tokens=2048,
@@ -257,11 +294,11 @@ def generate_summary(transcript, class_title="Class Lecture"):
     )
     
     try:
-        # STEP 3: Generate summary
+        # STEP 4: Generate summary
         outputs = llm.generate([prompt], sampling_params)
         summary = outputs[0].outputs[0].text.strip()
         
-        # STEP 4: Post-process to remove any reasoning/meta-commentary
+        # STEP 5: Post-process to remove any reasoning/meta-commentary
         # Look for markers that indicate the model is explaining its process
         reasoning_markers = [
             "First, let",
@@ -296,7 +333,7 @@ def generate_summary(transcript, class_title="Class Lecture"):
                 summary = '\n'.join(lines[start_idx:])
                 print(f"Extracted summary from line {start_idx}")
         
-        # STEP 5: Validation - check if summary still looks contaminated
+        # STEP 6: Validation - check if summary still looks contaminated
         contamination_markers = [
             "imperative mood",
             "placeholder",
@@ -334,6 +371,33 @@ Write only the notes, nothing else."""
         return summary
         
     except Exception as e:
+        error_msg = str(e)
+        
+        # Check if it's still a length error
+        if "longer than the maximum model length" in error_msg:
+            print(f"Error: Prompt still too long even after truncation!")
+            print(f"Transcript length: {len(transcript_clean)} chars")
+            print(f"Prompt length: {len(prompt)} chars")
+            
+            # Emergency fallback: use only first 1000 chars
+            print("Using emergency fallback: first 1000 chars only")
+            emergency_content = transcript_clean[:1000]
+            
+            simple_prompt = f"""Lecture: {class_title}
+
+Content: {emergency_content}
+
+Write brief study notes: overview, key concepts, takeaways."""
+            
+            try:
+                outputs = llm.generate([simple_prompt], SamplingParams(max_tokens=1024, temperature=0.3))
+                summary = outputs[0].outputs[0].text.strip()
+                print(f"Emergency fallback succeeded. Length: {len(summary)} characters")
+                return summary
+            except:
+                # Complete failure
+                return f"[Summary generation failed due to transcript length. Transcript: {len(transcript)} chars]"
+        
         print(f"Error generating summary: {e}")
         raise
 
@@ -844,21 +908,17 @@ def handle_class_notes(event):
         print("Step 6/6: Sending SQS callback notification...")
         step_start = time.time()
         
-        # Build callback message
+        # Build callback message - MINIMIZED for SQS size limits
+        # Only include data that callback worker actually needs
         callback_message = {
             "status": "success",
             "identifier": identifier,
-            "class_title": class_title,
-            "recording_url": recording_url,
-            "s3_url": s3_url,
             "s3_bucket": bucket_name,
             "s3_key": s3_key,
-            "transcript_length": len(transcript),
-            "transcript_word_count": len(transcript.split()),
+            # Optional metadata (for logging)
+            "processing_time_seconds": round(time.time() - start_time, 2),
             "summary_length": len(summary),
-            "processing_time_seconds": time.time() - start_time,
-            "timestamp": datetime.utcnow().isoformat(),
-            "metadata": metadata
+            "timestamp": datetime.utcnow().isoformat()
         }
         
         # Send SQS message
@@ -919,12 +979,12 @@ def handle_class_notes(event):
         # Send error callback if possible
         if callback_queue and sqs:
             try:
+                # MINIMIZED error callback - only essential data
                 error_callback = {
                     "status": "error",
                     "identifier": identifier,
-                    "error": str(e),
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "metadata": metadata
+                    "error": str(e)[:500],  # Truncate long errors
+                    "timestamp": datetime.utcnow().isoformat()
                 }
                 send_sqs_message(callback_queue, error_callback)
                 print("Error callback sent to SQS")
