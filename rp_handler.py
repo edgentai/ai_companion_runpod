@@ -9,6 +9,7 @@ import librosa
 import noisereduce as nr
 import soundfile as sf
 import time
+import numpy as np
 from vllm import LLM, SamplingParams
 from huggingface_hub import login
 from datetime import datetime
@@ -625,22 +626,62 @@ def extract_audio_ffmpeg(video_path, audio_path):
 
 
 def transcribe_audio(audio_path):
-    """Transcribe audio using Whisper"""
+    """Transcribe audio using Whisper with safe noise reduction"""
     if not batched_whisper:
         raise ValueError("Whisper model not initialized")
     
     print(f"Transcribing audio: {audio_path}")
     
     try:
-        # Load and reduce noise
-        print("Loading audio and reducing noise...")
+        # Load audio
+        print("Loading audio...")
         audio, sr = librosa.load(audio_path, sr=16000)
-        reduced_noise_audio = nr.reduce_noise(y=audio, sr=sr)
         
-        # Save cleaned audio
+        # Check for invalid audio data
+        if len(audio) == 0:
+            raise ValueError("Audio file is empty")
+        
+        # Try noise reduction with safety checks
+        use_noise_reduced = False
+        try:
+            print("Attempting noise reduction...")
+            
+            # Check if audio has sufficient signal
+            if audio.max() > 0.001:  # Has some signal
+                reduced_noise_audio = nr.reduce_noise(y=audio, sr=sr)
+                
+                # Validate noise-reduced audio
+                if not np.isnan(reduced_noise_audio).any() and not np.isinf(reduced_noise_audio).any():
+                    # Check if result is reasonable
+                    if reduced_noise_audio.max() > 0:
+                        audio = reduced_noise_audio
+                        use_noise_reduced = True
+                        print("Noise reduction successful")
+                    else:
+                        print("Warning: Noise reduction produced silent audio, using original")
+                else:
+                    print("Warning: Noise reduction produced invalid values (NaN/Inf), using original")
+            else:
+                print("Warning: Audio signal too weak for noise reduction, using original")
+                
+        except Exception as nr_error:
+            print(f"Warning: Noise reduction failed ({nr_error}), continuing with original audio")
+        
+        # Save cleaned/original audio as MP3 (more stable than wav for problematic audio)
         cleaned_path = audio_path.replace('.wav', '_cleaned.mp3')
-        sf.write(cleaned_path, reduced_noise_audio, sr)
-        print(f"Noise-reduced audio saved to: {cleaned_path}")
+        try:
+            # Normalize audio to prevent clipping
+            if audio.max() > 0:
+                audio = audio / max(abs(audio.max()), abs(audio.min()))
+            
+            sf.write(cleaned_path, audio, sr, format='mp3', subtype='MPEG_LAYER_III')
+            print(f"Audio saved to: {cleaned_path} (noise reduction: {use_noise_reduced})")
+            
+        except Exception as save_error:
+            print(f"Warning: Failed to save as MP3 ({save_error}), trying WAV format")
+            cleaned_path = audio_path.replace('.wav', '_cleaned_16k.wav')
+            sf.write(cleaned_path, audio, sr)
+            print(f"Audio saved to: {cleaned_path} (WAV fallback)")
         
         # Transcribe
         print("Transcribing with Whisper...")
@@ -656,22 +697,34 @@ def transcribe_audio(audio_path):
         
         # Filter and accumulate transcription
         transcription_parts = []
+        segment_count = 0
         for segment in segments:
             if segment.avg_logprob >= -0.5:
                 transcription_parts.append(segment.text)
-                print(f"[{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text[:50]}...")
+                segment_count += 1
+                if segment_count <= 10:  # Show first 10 segments
+                    print(f"[{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text[:50]}...")
         
         transcription = " ".join(transcription_parts).strip()
         
         # Cleanup
-        if os.path.exists(cleaned_path):
-            os.remove(cleaned_path)
+        try:
+            if os.path.exists(cleaned_path):
+                os.remove(cleaned_path)
+        except:
+            pass
         
-        print(f"Transcription completed. Length: {len(transcription)} characters")
+        if not transcription:
+            print("Warning: Transcription is empty. Audio may be silent or unintelligible.")
+            return "[No speech detected in audio]"
+        
+        print(f"Transcription completed. Length: {len(transcription)} characters, Segments: {segment_count}")
         return transcription
         
     except Exception as e:
         print(f"Error during transcription: {e}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
         raise
 
 
